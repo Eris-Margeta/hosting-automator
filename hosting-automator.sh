@@ -38,10 +38,10 @@ run_setup() {
   # --- DNS Setup Instructions ---
   echo -e "\n${YELLOW}========================= ACTION REQUIRED: DNS Setup =========================${NC}"
   echo -e "Before we proceed, you ${YELLOW}MUST${NC} configure the following DNS records in your domain provider's control panel."
-  echo ""
+  echo -e ""
   echo -e "1. ${BLUE}Root Domain A Record:${NC}   (Type: A, Name: @, Value: ${SERVER_IP})"
   echo -e "2. ${BLUE}Wildcard Domain A Record:${NC} (Type: A, Name: *, Value: ${SERVER_IP})"
-  echo ""
+  echo -e ""
   echo -e "${YELLOW}Please set up these two A records now.${NC}"
   read -p "Press [Enter] to continue once you have set the A records..."
 
@@ -84,6 +84,9 @@ EOF
   echo -e "\n${YELLOW}==================== ACTION REQUIRED: Certbot DNS Challenge ====================${NC}"
   echo -e "The script will now run Certbot to get your wildcard SSL certificate."
   echo -e "It will pause and show you a ${BLUE}TXT record${NC} to add to your DNS."
+  echo -e "${RED}IMPORTANT:${NC} Certbot may ask you to create a SECOND TXT record."
+  echo -e "If it does, you must ${YELLOW}ADD${NC} the second record. ${RED}DO NOT${NC} replace the first one."
+  echo -e "You will need to have ${YELLOW}TWO SEPARATE TXT records${NC} with the same name in your DNS provider."
   read -p "Press [Enter] to begin the interactive Certbot process..."
 
   certbot certonly --manual --preferred-challenges=dns -d "$DOMAIN" -d "*.$DOMAIN"
@@ -164,7 +167,7 @@ run_uninstall() {
 
   read -p "Are you sure you want to remove all Nginx, Certbot, and related files for $DOMAIN? [y/N]: " CONFIRM
   if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
-    echo "Uninstall cancelled."
+    echo -e "Uninstall cancelled."
     exit 0
   fi
 
@@ -207,11 +210,11 @@ clear
 echo -e "${BLUE}====================================================${NC}"
 echo -e "${BLUE}      Hosting Automator: Nginx & Wildcard SSL       ${NC}"
 echo -e "${BLUE}====================================================${NC}"
-echo ""
-echo "Please choose an action to perform:"
-echo "  1) ${GREEN}SETUP${NC}:    Run the full installation and configuration."
-echo "  2) ${RED}UNINSTALL${NC}: Roll back all changes made by this script."
-echo ""
+echo -e ""
+echo -e "Please choose an action to perform:"
+echo -e "  1) ${GREEN}SETUP${NC}:    Run the full installation and configuration."
+echo -e "  2) ${RED}UNINSTALL${NC}: Roll back all changes made by this script."
+echo -e ""
 read -p "Enter your choice (1 or 2): " ACTION
 
 case $ACTION in
