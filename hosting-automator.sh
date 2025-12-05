@@ -83,7 +83,6 @@ EOF
   # --- Step 4: Wildcard SSL Certificate with Certbot ---
   echo -e "\n${YELLOW}==================== ACTION REQUIRED: Certbot DNS Challenge ====================${NC}"
   echo -e "The script will now run Certbot to get your wildcard SSL certificate."
-  echo -e "It will pause and show you a ${BLUE}TXT record${NC} to add to your DNS."
   echo -e "${RED}IMPORTANT:${NC} Certbot may ask you to create a SECOND TXT record."
   echo -e "If it does, you must ${YELLOW}ADD${NC} the second record. ${RED}DO NOT${NC} replace the first one."
   echo -e "You will need to have ${YELLOW}TWO SEPARATE TXT records${NC} with the same name in your DNS provider."
@@ -99,27 +98,59 @@ EOF
 
   # --- Step 5: Final Nginx Configuration ---
   echo -e "\n${BLUE}--- Applying final Nginx configuration... ---${NC}"
+
+  # FIX: Create the missing Let's Encrypt options file to prevent Nginx error.
+  mkdir -p /etc/letsencrypt/
+  cat >/etc/letsencrypt/options-ssl-nginx.conf <<EOF
+ssl_session_cache shared:le_nginx_SSL:10m;
+ssl_session_timeout 1440m;
+ssl_session_tickets off;
+
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+
+ssl_ciphers "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384";
+EOF
+  # FIX: Generate a Diffie-Hellman group file used by the options file above.
+  openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048
+
+  # Now, write the final Nginx config
   cat >/etc/nginx/sites-available/$DOMAIN <<EOF
+# This server block handles the root domain (e.g., tejl.com)
 server {
-    listen 443 ssl http2; listen [::]:443 ssl http2;
+    # FIX: Updated listen directive to modern syntax to avoid warnings.
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
     server_name $DOMAIN;
     root /root/www/root;
     index index.html;
+
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
+
+# This server block dynamically handles all subdomains (e.g., blog.tejl.com)
 server {
-    listen 443 ssl http2; listen [::]:443 ssl http2;
+    # FIX: Updated listen directive to modern syntax to avoid warnings.
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
     server_name ~^(?<subdomain>.+)\.$DOMAIN$;
     root /root/www/\$subdomain;
     index index.html;
+
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
+
+# Redirect all HTTP traffic to HTTPS for security
 server {
     listen 80; listen [::]:80;
     server_name $DOMAIN *.$DOMAIN;
@@ -172,20 +203,15 @@ run_uninstall() {
   fi
 
   echo -e "\n${BLUE}--- Stopping and disabling services... ---${NC}"
-  systemctl stop nginx || true # Continue even if it fails (e.g., already stopped)
+  systemctl stop nginx || true
   systemctl disable nginx || true
 
   echo -e "\n${BLUE}--- Removing packages... ---${NC}"
-  # Use '|| true' to prevent script from exiting if a package is already removed
   apt purge --auto-remove -y nginx nginx-common certbot python3-certbot-nginx || true
 
-  echo -e "\n${BLUE}--- Deleting Let's Encrypt certificates... ---${NC}"
-  # Check if the cert directory exists before trying to delete
-  if [ -d "/etc/letsencrypt/live/$DOMAIN" ]; then
-    certbot delete --cert-name $DOMAIN
-  else
-    echo -e "${YELLOW}Certificate for $DOMAIN not found, skipping.${NC}"
-  fi
+  echo -e "\n${BLUE}--- Deleting Let's Encrypt certificates and files... ---${NC}"
+  # Remove the entire letsencrypt directory which contains certs, configs, and our helper files
+  rm -rf /etc/letsencrypt/
 
   echo -e "\n${BLUE}--- Resetting Firewall (UFW)... ---${NC}"
   ufw delete allow 'Nginx Full' || true
@@ -199,7 +225,6 @@ run_uninstall() {
 
   echo -e "\n${GREEN}========================= UNINSTALL COMPLETE =========================${NC}"
   echo -e "All associated packages, configurations, and files have been removed."
-  echo -e "Your system has been rolled back to a state before the script was run."
   echo -e "${GREEN}======================================================================${NC}"
 }
 
