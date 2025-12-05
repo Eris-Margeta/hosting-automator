@@ -7,6 +7,10 @@
 # 1. SETUP: A full installation and configuration of the web server.
 # 2. UNINSTALL: A complete removal of all changes made by the setup process.
 #
+# This version creates a flexible directory structure inside the user's home:
+# - $HOME/SERVER/root/       -> Serves the apex domain (e.g., yourdomain.com)
+# - $HOME/SERVER/www/        -> Serves the 'www' subdomain (e.g., www.yourdomain.com)
+# - $HOME/SERVER/subdomains/ -> Serves all other dynamic subdomains.
 # ==============================================================================
 
 # Exit immediately if a command exits with a non-zero status.
@@ -58,34 +62,42 @@ run_setup() {
   ufw --force enable
   echo -e "${GREEN}Firewall is active and allows SSH, HTTP, and HTTPS traffic.${NC}"
 
-  # --- Step 3: Directory and Initial Nginx Setup ---
-  echo -e "\n${BLUE}--- Creating web directory and setting up Nginx... ---${NC}"
-  mkdir -p /root/www/root
-  echo "<h1>Main Domain Page - Hosted from /root/www/root</h1>" >/root/www/root/index.html
-  chown -R www-data:www-data /root/www
-  echo -e "Created web directory at /root/www"
-  rm -f /etc/nginx/sites-enabled/default
+  # --- Step 3: Directory Structure and Initial Nginx Setup ---
+  echo -e "\n${BLUE}--- Creating web directory structure and setting up Nginx... ---${NC}"
+  # Create the new, flexible directory structure in the current user's home
+  mkdir -p "$HOME/SERVER/root"
+  mkdir -p "$HOME/SERVER/www"
+  mkdir -p "$HOME/SERVER/subdomains/blog"
 
+  # Create placeholder content for immediate testing
+  echo "<h1>Apex Domain Works! (e.g., https://$DOMAIN)</h1>" >"$HOME/SERVER/root/index.html"
+  echo "<h1>WWW Subdomain Works! (e.g., https://www.$DOMAIN)</h1>" >"$HOME/SERVER/www/index.html"
+  echo "<h1>Blog Subdomain Works! (e.g., https://blog.$DOMAIN)</h1>" >"$HOME/SERVER/subdomains/blog/index.html"
+
+  # Set ownership for the entire SERVER directory to the web server user
+  chown -R www-data:www-data "$HOME/SERVER"
+  echo -e "Created web directory structure at $HOME/SERVER"
+
+  # Standard Nginx prep
+  rm -f /etc/nginx/sites-enabled/default
   cat >/etc/nginx/sites-available/$DOMAIN <<EOF
 server {
     listen 80; listen [::]:80;
     server_name $DOMAIN *.$DOMAIN;
-    root /var/www/html; # Temporary default root
+    root /var/www/html; # Temporary default root for Certbot
     index index.html;
 }
 EOF
-
   ln -s /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
   nginx -t
   systemctl reload nginx
-  echo -e "${GREEN}Nginx has been installed and configured with a temporary site for ${DOMAIN}.${NC}"
+  echo -e "${GREEN}Nginx has been installed with a temporary site for ${DOMAIN}.${NC}"
 
   # --- Step 4: Wildcard SSL Certificate with Certbot ---
   echo -e "\n${YELLOW}==================== ACTION REQUIRED: Certbot DNS Challenge ====================${NC}"
   echo -e "The script will now run Certbot to get your wildcard SSL certificate."
   echo -e "${RED}IMPORTANT:${NC} Certbot may ask you to create a SECOND TXT record."
   echo -e "If it does, you must ${YELLOW}ADD${NC} the second record. ${RED}DO NOT${NC} replace the first one."
-  echo -e "You will need to have ${YELLOW}TWO SEPARATE TXT records${NC} with the same name in your DNS provider."
   read -p "Press [Enter] to begin the interactive Certbot process..."
 
   certbot certonly --manual --preferred-challenges=dns -d "$DOMAIN" -d "*.$DOMAIN"
@@ -111,39 +123,44 @@ EOF
   openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048
 
   cat >/etc/nginx/sites-available/$DOMAIN <<EOF
-# This server block handles the root domain (e.g., tejl.com)
+# Block 1: Handles the APEX/ROOT domain (e.g., tejl.com)
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-
+    listen 443 ssl; listen [::]:443 ssl; http2 on;
     server_name $DOMAIN;
-    root /root/www/root;
+    root $HOME/SERVER/root;
     index index.html;
-
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
 
-# This server block dynamically handles all subdomains (e.g., blog.tejl.com)
+# Block 2: Handles the WWW subdomain specifically (e.g., www.tejl.com)
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-
-    server_name ~^(?<subdomain>.+)\.$DOMAIN$;
-    root /root/www/\$subdomain;
+    listen 443 ssl; listen [::]:443 ssl; http2 on;
+    server_name www.$DOMAIN;
+    root $HOME/SERVER/www;
     index index.html;
-
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
 
-# Redirect all HTTP traffic to HTTPS for security
+# Block 3: Dynamically handles ALL OTHER subdomains (e.g., blog.tejl.com)
+server {
+    listen 443 ssl; listen [::]:443 ssl; http2 on;
+    # Regex captures the subdomain, but will be ignored for 'www' due to the specific block above.
+    server_name ~^(?<subdomain>.+)\.$DOMAIN$;
+    root $HOME/SERVER/subdomains/\$subdomain;
+    index index.html;
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+}
+
+# Block 4: Redirects all HTTP traffic to HTTPS
 server {
     listen 80; listen [::]:80;
     server_name $DOMAIN *.$DOMAIN;
@@ -156,13 +173,11 @@ EOF
 
   # --- Step 6: Create Renewal Information File ---
   echo -e "\n${BLUE}--- Creating detailed renewal information file... ---${NC}"
-
-  # Get the creation date (today) and the expiry date from the certificate
   CREATED_DATE=$(date +%d.%m.%Y)
   EXPIRY_STRING=$(openssl x509 -enddate -noout -in /etc/letsencrypt/live/$DOMAIN/cert.pem | cut -d'=' -f2)
   EXPIRY_DATE=$(date -d "$EXPIRY_STRING" +%d.%m.%Y)
 
-  cat >/root/certbot-renewal-information.txt <<EOF
+  cat >"$HOME/certbot-renewal-information.txt" <<EOF
 # =========================================================
 # SSL Certificate Renewal Information for $DOMAIN
 # =========================================================
@@ -170,35 +185,26 @@ EOF
 Certificate Created On:         $CREATED_DATE
 Certificate Expires On:         $EXPIRY_DATE (Latest renewal date)
 
-Your wildcard SSL certificate was generated using Certbot's "manual" method.
-This means the standard 'certbot renew' cron job CANNOT automate the renewal.
-
-You must MANUALLY renew the certificate before it expires. It is recommended
-to renew it about a week before the expiry date.
-
-To renew, run the following command. It will prompt you to create a new
-DNS TXT record, just like you did during the initial setup:
-
+You must MANUALLY renew the certificate before it expires. To renew, run:
   certbot renew
 
-After renewing, you should reload Nginx to apply the new certificate:
-
+After renewing, reload Nginx to apply the new certificate:
   systemctl reload nginx
-
-You can always check the exact expiry date of your current certificate with:
-
-  openssl x509 -enddate -noout -in /etc/letsencrypt/live/$DOMAIN/cert.pem
 EOF
-
-  echo -e "${GREEN}Renewal information saved to /root/certbot-renewal-information.txt${NC}"
+  echo -e "${GREEN}Renewal information saved to $HOME/certbot-renewal-information.txt${NC}"
 
   # --- Final Summary ---
   echo -e "\n${GREEN}============================= SETUP COMPLETE! ==============================${NC}"
-  echo -e "To add a new site (e.g., https://blog.${DOMAIN}), run:"
-  echo -e "  ${YELLOW}mkdir /root/www/blog${NC}"
-  echo -e "  ${YELLOW}echo '<h1>Hello Blog!</h1>' > /root/www/blog/index.html${NC}"
-  echo -e "  ${YELLOW}chown -R www-data:www-data /root/www/blog${NC}"
-  echo -e "${YELLOW}IMPORTANT: Remember to manually renew your SSL certificate! See details in /root/certbot-renewal-information.txt${NC}"
+  echo -e "Your server is now configured with the following structure:"
+  echo -e "  - ${BLUE}$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/root/${NC}"
+  echo -e "  - ${BLUE}www.$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/www/${NC}"
+  echo -e "  - ${BLUE}AnyOtherSubdomain.$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/subdomains/AnyOtherSubdomain/${NC}"
+  echo -e ""
+  echo -e "To add a new dynamic subdomain (e.g., https://portfolio.${DOMAIN}), run:"
+  echo -e "  ${YELLOW}mkdir $HOME/SERVER/subdomains/portfolio${NC}"
+  echo -e "  ${YELLOW}echo '<h1>Portfolio</h1>' > $HOME/SERVER/subdomains/portfolio/index.html${NC}"
+  echo -e "  ${YELLOW}chown -R www-data:www-data $HOME/SERVER/subdomains/portfolio${NC}"
+  echo -e "\n${YELLOW}IMPORTANT: Remember to manually renew your SSL certificate! See details in $HOME/certbot-renewal-information.txt${NC}"
   echo -e "${GREEN}==========================================================================${NC}"
 }
 
@@ -236,8 +242,8 @@ run_uninstall() {
   echo -e "\n${BLUE}--- Removing files and directories... ---${NC}"
   rm -f /etc/nginx/sites-enabled/$DOMAIN
   rm -f /etc/nginx/sites-available/$DOMAIN
-  rm -rf /root/www
-  rm -f /root/certbot-renewal-information.txt
+  rm -rf "$HOME/SERVER"
+  rm -f "$HOME/certbot-renewal-information.txt"
 
   echo -e "\n${GREEN}========================= UNINSTALL COMPLETE =========================${NC}"
   echo -e "All associated packages, configurations, and files have been removed."
