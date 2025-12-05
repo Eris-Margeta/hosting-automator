@@ -7,10 +7,10 @@
 # 1. SETUP: A full installation and configuration of the web server.
 # 2. UNINSTALL: A complete removal of all changes made by the setup process.
 #
-# This version creates a flexible directory structure inside the user's home:
-# - $HOME/SERVER/root/       -> Serves the apex domain (e.g., yourdomain.com)
-# - $HOME/SERVER/www/        -> Serves the 'www' subdomain (e.g., www.yourdomain.com)
-# - $HOME/SERVER/subdomains/ -> Serves all other dynamic subdomains.
+# This version creates a professional hosting structure:
+# - yourdomain.com -> Redirects to www.yourdomain.com
+# - www.yourdomain.com -> Served from $HOME/SERVER/www/
+# - *.yourdomain.com -> Served dynamically from $HOME/SERVER/subdomains/
 # ==============================================================================
 
 # Exit immediately if a command exits with a non-zero status.
@@ -27,25 +27,45 @@ NC='\033[0m' # No Color
 #                             SETUP FUNCTION
 # ==============================================================================
 run_setup() {
-  # --- User Input ---
-  echo -e "${BLUE}--- Server & Domain Configuration ---${NC}"
+  # --- Step 0: Pre-flight Checks and Configuration ---
+  echo -e "${BLUE}--- Initial Configuration ---${NC}"
+
+  # Install curl if not present, as it's needed to detect the IP
+  if ! command -v curl &>/dev/null; then
+    echo -e "${YELLOW}curl not found. Installing it first...${NC}"
+    apt update
+    apt install -y curl
+  fi
+
+  # Automatically detect the server's public IP address
+  SERVER_IP=$(curl -s https://icanhazip.com)
+
   read -p "Please enter your root domain (e.g., tejl.com): " DOMAIN
-  read -p "Please enter your server's public IP address (e.g., 93.136.180.191): " SERVER_IP
 
   if [ -z "$DOMAIN" ] || [ -z "$SERVER_IP" ]; then
-    echo -e "${RED}Error: Domain and Server IP cannot be empty. Exiting.${NC}"
+    echo -e "${RED}Error: Could not determine Domain or Server IP. Exiting.${NC}"
     exit 1
   fi
 
-  echo -e "\n${GREEN}Configuration successful. Domain: ${DOMAIN}, IP: ${SERVER_IP}${NC}"
+  echo -e "\n${GREEN}Configuration successful.${NC}"
+  echo -e "  - Domain: ${YELLOW}$DOMAIN${NC}"
+  echo -e "  - Detected Public IP: ${YELLOW}$SERVER_IP${NC}"
 
   # --- DNS Setup Instructions ---
   echo -e "\n${YELLOW}========================= ACTION REQUIRED: DNS Setup =========================${NC}"
-  echo -e "Before we proceed, you ${YELLOW}MUST${NC} configure the following DNS records in your domain provider's control panel."
+  echo -e "Before we proceed, you ${YELLOW}MUST${NC} configure the following DNS records."
+  echo -e "The server's IP has been automatically detected for you."
   echo -e ""
-  echo -e "1. ${BLUE}Root Domain A Record:${NC}   (Type: A, Name: @, Value: ${SERVER_IP})"
-  echo -e "2. ${BLUE}Wildcard Domain A Record:${NC} (Type: A, Name: *, Value: ${SERVER_IP})"
-  echo -e ""
+  echo -e "1. ${BLUE}Root Domain A Record (for redirect):${NC}"
+  echo -e "   - Type:    A"
+  echo -e "   - Name:    @"
+  echo -e "   - Value:   ${SERVER_IP}"
+  echo ""
+  echo -e "2. ${BLUE}Wildcard Domain A Record:${NC}"
+  echo -e "   - Type:    A"
+  echo -e "   - Name:    *"
+  echo -e "   - Value:   ${SERVER_IP}"
+  echo ""
   echo -e "${YELLOW}Please set up these two A records now.${NC}"
   read -p "Press [Enter] to continue once you have set the A records..."
 
@@ -53,7 +73,8 @@ run_setup() {
   echo -e "\n${BLUE}--- Updating system and installing required packages... ---${NC}"
   apt update
   apt upgrade -y
-  apt install -y nginx certbot python3-certbot-nginx ufw
+  # Ensure curl is listed here as well, in case it was missing
+  apt install -y nginx certbot python3-certbot-nginx ufw curl
 
   # --- Step 2: Firewall Configuration ---
   echo -e "\n${BLUE}--- Configuring Firewall (UFW)... ---${NC}"
@@ -64,27 +85,21 @@ run_setup() {
 
   # --- Step 3: Directory Structure and Initial Nginx Setup ---
   echo -e "\n${BLUE}--- Creating web directory structure and setting up Nginx... ---${NC}"
-  # Create the new, flexible directory structure in the current user's home
-  mkdir -p "$HOME/SERVER/root"
   mkdir -p "$HOME/SERVER/www"
   mkdir -p "$HOME/SERVER/subdomains/blog"
 
-  # Create placeholder content for immediate testing
-  echo "<h1>Apex Domain Works! (e.g., https://$DOMAIN)</h1>" >"$HOME/SERVER/root/index.html"
-  echo "<h1>WWW Subdomain Works! (e.g., https://www.$DOMAIN)</h1>" >"$HOME/SERVER/www/index.html"
+  echo "<h1>WWW Main Site Works! (e.g., https://www.$DOMAIN)</h1>" >"$HOME/SERVER/www/index.html"
   echo "<h1>Blog Subdomain Works! (e.g., https://blog.$DOMAIN)</h1>" >"$HOME/SERVER/subdomains/blog/index.html"
 
-  # Set ownership for the entire SERVER directory to the web server user
   chown -R www-data:www-data "$HOME/SERVER"
   echo -e "Created web directory structure at $HOME/SERVER"
 
-  # Standard Nginx prep
   rm -f /etc/nginx/sites-enabled/default
   cat >/etc/nginx/sites-available/$DOMAIN <<EOF
 server {
     listen 80; listen [::]:80;
     server_name $DOMAIN *.$DOMAIN;
-    root /var/www/html; # Temporary default root for Certbot
+    root /var/www/html;
     index index.html;
 }
 EOF
@@ -123,16 +138,17 @@ EOF
   openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048
 
   cat >/etc/nginx/sites-available/$DOMAIN <<EOF
-# Block 1: Handles the APEX/ROOT domain (e.g., tejl.com)
+# Block 1: Redirects the APEX/ROOT domain to WWW (e.g., tejl.com -> www.tejl.com)
 server {
     listen 443 ssl; listen [::]:443 ssl; http2 on;
     server_name $DOMAIN;
-    root $HOME/SERVER/root;
-    index index.html;
+
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    return 301 https://www.$DOMAIN\$request_uri;
 }
 
 # Block 2: Handles the WWW subdomain specifically (e.g., www.tejl.com)
@@ -141,6 +157,7 @@ server {
     server_name www.$DOMAIN;
     root $HOME/SERVER/www;
     index index.html;
+
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
@@ -150,10 +167,10 @@ server {
 # Block 3: Dynamically handles ALL OTHER subdomains (e.g., blog.tejl.com)
 server {
     listen 443 ssl; listen [::]:443 ssl; http2 on;
-    # Regex captures the subdomain, but will be ignored for 'www' due to the specific block above.
-    server_name ~^(?<subdomain>.+)\.$DOMAIN$;
+    server_name ~^(?!www\.)(?<subdomain>.+)\.$DOMAIN$;
     root $HOME/SERVER/subdomains/\$subdomain;
     index index.html;
+
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
@@ -196,7 +213,7 @@ EOF
   # --- Final Summary ---
   echo -e "\n${GREEN}============================= SETUP COMPLETE! ==============================${NC}"
   echo -e "Your server is now configured with the following structure:"
-  echo -e "  - ${BLUE}$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/root/${NC}"
+  echo -e "  - ${BLUE}$DOMAIN${NC} permanently redirects to ${YELLOW}www.$DOMAIN${NC}"
   echo -e "  - ${BLUE}www.$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/www/${NC}"
   echo -e "  - ${BLUE}AnyOtherSubdomain.$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/subdomains/AnyOtherSubdomain/${NC}"
   echo -e ""
@@ -230,7 +247,7 @@ run_uninstall() {
   systemctl disable nginx || true
 
   echo -e "\n${BLUE}--- Removing packages... ---${NC}"
-  apt purge --auto-remove -y nginx nginx-common certbot python3-certbot-nginx || true
+  apt purge --auto-remove -y nginx nginx-common certbot python3-certbot-nginx curl || true
 
   echo -e "\n${BLUE}--- Deleting Let's Encrypt certificates and files... ---${NC}"
   rm -rf /etc/letsencrypt/
