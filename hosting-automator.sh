@@ -2,6 +2,7 @@
 
 # ==============================================================================
 #           Hosting Automator: Nginx & Wildcard SSL Setup Script
+#                           --- Final Version ---
 #
 # This script can perform two main actions:
 # 1. SETUP: A full installation and configuration of the web server.
@@ -22,207 +23,181 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
+STEP_COUNT=1
+
+# --- Helper function for printing styled steps ---
+print_step() {
+  echo -e "\n${BLUE}═══ Step ${STEP_COUNT}: $1 ${NC}"
+  ((STEP_COUNT++))
+}
 
 # ==============================================================================
 #                             SETUP FUNCTION
 # ==============================================================================
 run_setup() {
-  # --- Step 0: Pre-flight Checks and Configuration ---
-  echo -e "${BLUE}--- Initial Configuration ---${NC}"
+  print_step "Initial Configuration"
 
-  # Install curl if not present, as it's needed to detect the IP
-  if ! command -v curl &>/dev/null; then
-    echo -e "${YELLOW}curl not found. Installing it first...${NC}"
-    apt update
-    apt install -y curl
+  # Install curl/dnsutils if not present for IP detection
+  echo -n "Checking for required tools (curl, dig)... "
+  if ! command -v curl &>/dev/null || ! command -v dig &>/dev/null; then
+    echo -e "${YELLOW}Not found. Installing...${NC}"
+    apt-get update &>/dev/null
+    apt-get install -y curl dnsutils &>/dev/null
   fi
+  echo -e "${GREEN}OK.${NC}"
 
-  # Automatically detect the server's public IP address
-  SERVER_IP=$(curl -s https://icanhazip.com)
+  # Robustly detect the server's public IPv4 address using multiple methods
+  echo -n "Detecting public IPv4 address... "
+  SERVER_IP=$(curl -s https://ipv4.icanhazip.com)
+  if [ -z "$SERVER_IP" ]; then
+    SERVER_IP=$(curl -s https://api.ipify.org)
+  fi
+  if [ -z "$SERVER_IP" ]; then
+    SERVER_IP=$(dig +short myip.opendns.com @resolver1.opendns.com)
+  fi
+  if [ -z "$SERVER_IP" ]; then
+    echo -e "${RED}Fatal: Could not determine public IPv4 address after 3 attempts. Please check network connectivity.${NC}"
+    exit 1
+  fi
+  echo -e "${GREEN}Done.${NC}"
 
   read -p "Please enter your root domain (e.g., tejl.com): " DOMAIN
-
-  if [ -z "$DOMAIN" ] || [ -z "$SERVER_IP" ]; then
-    echo -e "${RED}Error: Could not determine Domain or Server IP. Exiting.${NC}"
+  if [ -z "$DOMAIN" ]; then
+    echo -e "${RED}Error: Domain cannot be empty. Exiting.${NC}"
     exit 1
   fi
 
-  echo -e "\n${GREEN}Configuration successful.${NC}"
+  echo -e "\n${GREEN}✔ Configuration successful.${NC}"
   echo -e "  - Domain: ${YELLOW}$DOMAIN${NC}"
-  echo -e "  - Detected Public IP: ${YELLOW}$SERVER_IP${NC}"
+  echo -e "  - Detected Public IPv4: ${YELLOW}$SERVER_IP${NC}"
 
   # --- DNS Setup Instructions ---
-  echo -e "\n${YELLOW}========================= ACTION REQUIRED: DNS Setup =========================${NC}"
-  echo -e "Before we proceed, you ${YELLOW}MUST${NC} configure the following DNS records."
-  echo -e "The server's IP has been automatically detected for you."
-  echo -e ""
-  echo -e "1. ${BLUE}Root Domain A Record (for redirect):${NC}"
-  echo -e "   - Type:    A"
-  echo -e "   - Name:    @"
-  echo -e "   - Value:   ${SERVER_IP}"
-  echo ""
-  echo -e "2. ${BLUE}Wildcard Domain A Record:${NC}"
-  echo -e "   - Type:    A"
-  echo -e "   - Name:    *"
-  echo -e "   - Value:   ${SERVER_IP}"
-  echo ""
-  echo -e "${YELLOW}Please set up these two A records now.${NC}"
+  echo -e "\n${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗"
+  echo -e "║${NC}                           ${YELLOW}ACTION REQUIRED: DNS Setup${NC}                           ${YELLOW}║"
+  echo -e "║${NC} Before we proceed, you ${YELLOW}MUST${NC} configure the following DNS records.              ${YELLOW}║"
+  echo -e "║${NC} The server's IPv4 has been automatically detected for you.                     ${YELLOW}║"
+  echo -e "╠══════════════════════════════════════════════════════════════════════════════╣"
+  echo -e "║ ${BLUE}Record 1: Root Domain A Record (for redirect)${NC}                                 ${YELLOW}║"
+  echo -e "║   - Type:    A                                                               ${YELLOW}║"
+  echo -e "║   - Name:    @                                                               ${YELLOW}║"
+  echo -e "║   - Value:   ${SERVER_IP}                                                     ${YELLOW}║"
+  echo -e "║                                                                              ${YELLOW}║"
+  echo -e "║ ${BLUE}Record 2: Wildcard Domain A Record${NC}                                          ${YELLOW}║"
+  echo -e "║   - Type:    A                                                               ${YELLOW}║"
+  echo -e "║   - Name:    *                                                               ${YELLOW}║"
+  echo -e "║   - Value:   ${SERVER_IP}                                                     ${YELLOW}║"
+  echo -e "╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
   read -p "Press [Enter] to continue once you have set the A records..."
 
-  # --- Step 1: System Update & Package Installation ---
-  echo -e "\n${BLUE}--- Updating system and installing required packages... ---${NC}"
-  apt update
-  apt upgrade -y
-  # Ensure curl is listed here as well, in case it was missing
-  apt install -y nginx certbot python3-certbot-nginx ufw curl
+  print_step "Installing Required Packages"
+  echo -n "Updating sources and installing Nginx, Certbot, UFW... "
+  apt-get update &>/dev/null
+  apt-get upgrade -y &>/dev/null
+  apt-get install -y nginx certbot python3-certbot-nginx ufw curl dnsutils &>/dev/null
+  echo -e "${GREEN}Done.${NC}"
 
-  # --- Step 2: Firewall Configuration ---
-  echo -e "\n${BLUE}--- Configuring Firewall (UFW)... ---${NC}"
-  ufw allow 'OpenSSH'
-  ufw allow 'Nginx Full'
-  ufw --force enable
-  echo -e "${GREEN}Firewall is active and allows SSH, HTTP, and HTTPS traffic.${NC}"
+  print_step "Configuring Firewall (UFW)"
+  ufw allow 'OpenSSH' &>/dev/null
+  ufw allow 'Nginx Full' &>/dev/null
+  ufw --force enable &>/dev/null
+  echo -e "Status: ${GREEN}Firewall is active and allows SSH, HTTP, and HTTPS traffic.${NC}"
 
-  # --- Step 3: Directory Structure and Initial Nginx Setup ---
-  echo -e "\n${BLUE}--- Creating web directory structure and setting up Nginx... ---${NC}"
+  print_step "Creating Directory Structure"
   mkdir -p "$HOME/SERVER/www"
   mkdir -p "$HOME/SERVER/subdomains/blog"
-
   echo "<h1>WWW Main Site Works! (e.g., https://www.$DOMAIN)</h1>" >"$HOME/SERVER/www/index.html"
   echo "<h1>Blog Subdomain Works! (e.g., https://blog.$DOMAIN)</h1>" >"$HOME/SERVER/subdomains/blog/index.html"
-
   chown -R www-data:www-data "$HOME/SERVER"
-  echo -e "Created web directory structure at $HOME/SERVER"
+  echo -e "Status: ${GREEN}Web directory structure created at $HOME/SERVER${NC}"
 
+  print_step "Preparing Nginx for SSL Certificate"
   rm -f /etc/nginx/sites-enabled/default
   cat >/etc/nginx/sites-available/$DOMAIN <<EOF
-server {
-    listen 80; listen [::]:80;
-    server_name $DOMAIN *.$DOMAIN;
-    root /var/www/html;
-    index index.html;
-}
+server { listen 80; listen [::]:80; server_name $DOMAIN *.$DOMAIN; root /var/www/html; }
 EOF
   ln -s /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
-  nginx -t
   systemctl reload nginx
-  echo -e "${GREEN}Nginx has been installed with a temporary site for ${DOMAIN}.${NC}"
+  echo -e "Status: ${GREEN}Temporary Nginx configuration applied.${NC}"
 
-  # --- Step 4: Wildcard SSL Certificate with Certbot ---
-  echo -e "\n${YELLOW}==================== ACTION REQUIRED: Certbot DNS Challenge ====================${NC}"
-  echo -e "The script will now run Certbot to get your wildcard SSL certificate."
-  echo -e "${RED}IMPORTANT:${NC} Certbot may ask you to create a SECOND TXT record."
-  echo -e "If it does, you must ${YELLOW}ADD${NC} the second record. ${RED}DO NOT${NC} replace the first one."
+  print_step "Obtaining Wildcard SSL Certificate (Interactive)"
+  echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗"
+  echo -e "║${NC}                       ${YELLOW}ACTION REQUIRED: Certbot DNS Challenge${NC}                     ${YELLOW}║"
+  echo -e "║${NC} The script will now run Certbot. It will pause and show you a TXT record.      ${YELLOW}║"
+  echo -e "║${RED} IMPORTANT:${NC} Certbot may ask you to create a ${YELLOW}SECOND${NC} TXT record.            ${YELLOW}║"
+  echo -e "║ If it does, you must ${YELLOW}ADD${NC} the second record. ${RED}DO NOT${NC} replace the first one.   ${YELLOW}║"
+  echo -e "╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
   read -p "Press [Enter] to begin the interactive Certbot process..."
-
   certbot certonly --manual --preferred-challenges=dns -d "$DOMAIN" -d "*.$DOMAIN"
-
   if [ ! -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]; then
-    echo -e "${RED}Certbot failed. Certificate not created. Exiting.${NC}"
+    echo -e "${RED}Fatal: Certbot failed. Certificate not created. Exiting.${NC}"
     exit 1
   fi
-  echo -e "${GREEN}SSL Certificate successfully obtained!${NC}"
+  echo -e "${GREEN}✔ SSL Certificate successfully obtained!${NC}"
 
-  # --- Step 5: Final Nginx Configuration ---
-  echo -e "\n${BLUE}--- Applying final Nginx configuration... ---${NC}"
-
+  print_step "Applying Final Nginx Configuration"
+  echo -n "Creating SSL parameters and Nginx config... "
   mkdir -p /etc/letsencrypt/
   cat >/etc/letsencrypt/options-ssl-nginx.conf <<EOF
-ssl_session_cache shared:le_nginx_SSL:10m;
-ssl_session_timeout 1440m;
-ssl_session_tickets off;
-ssl_protocols TLSv1.2 TLSv1.3;
-ssl_prefer_server_ciphers off;
+ssl_session_cache shared:le_nginx_SSL:10m; ssl_session_timeout 1440m; ssl_session_tickets off;
+ssl_protocols TLSv1.2 TLSv1.3; ssl_prefer_server_ciphers off;
 ssl_ciphers "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384";
 EOF
-  openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048
-
+  openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048 &>/dev/null
   cat >/etc/nginx/sites-available/$DOMAIN <<EOF
-# Block 1: Redirects the APEX/ROOT domain to WWW (e.g., tejl.com -> www.tejl.com)
-server {
-    listen 443 ssl; listen [::]:443 ssl; http2 on;
-    server_name $DOMAIN;
-
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-
+server { # Redirects the APEX/ROOT domain to WWW
+    listen 443 ssl http2; listen [::]:443 ssl http2; server_name $DOMAIN;
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf; ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     return 301 https://www.$DOMAIN\$request_uri;
 }
-
-# Block 2: Handles the WWW subdomain specifically (e.g., www.tejl.com)
-server {
-    listen 443 ssl; listen [::]:443 ssl; http2 on;
-    server_name www.$DOMAIN;
-    root $HOME/SERVER/www;
-    index index.html;
-
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+server { # Handles the WWW subdomain specifically
+    listen 443 ssl http2; listen [::]:443 ssl http2; server_name www.$DOMAIN;
+    root $HOME/SERVER/www; index index.html;
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf; ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
-
-# Block 3: Dynamically handles ALL OTHER subdomains (e.g., blog.tejl.com)
-server {
-    listen 443 ssl; listen [::]:443 ssl; http2 on;
+server { # Dynamically handles ALL OTHER subdomains
+    listen 443 ssl http2; listen [::]:443 ssl http2;
     server_name ~^(?!www\.)(?<subdomain>.+)\.$DOMAIN$;
-    root $HOME/SERVER/subdomains/\$subdomain;
-    index index.html;
-
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    root $HOME/SERVER/subdomains/\$subdomain; index index.html;
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf; ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
-
-# Block 4: Redirects all HTTP traffic to HTTPS
-server {
-    listen 80; listen [::]:80;
-    server_name $DOMAIN *.$DOMAIN;
+server { # Redirects all HTTP traffic to HTTPS
+    listen 80; listen [::]:80; server_name $DOMAIN *.$DOMAIN;
     location / { return 301 https://\$host\$request_uri; }
 }
 EOF
-  nginx -t
+  nginx -t &>/dev/null
   systemctl reload nginx
-  echo -e "${GREEN}Final Nginx configuration has been applied.${NC}"
+  echo -e "${GREEN}Done.${NC}"
 
-  # --- Step 6: Create Renewal Information File ---
-  echo -e "\n${BLUE}--- Creating detailed renewal information file... ---${NC}"
+  print_step "Creating Renewal Information File"
   CREATED_DATE=$(date +%d.%m.%Y)
   EXPIRY_STRING=$(openssl x509 -enddate -noout -in /etc/letsencrypt/live/$DOMAIN/cert.pem | cut -d'=' -f2)
   EXPIRY_DATE=$(date -d "$EXPIRY_STRING" +%d.%m.%Y)
-
   cat >"$HOME/certbot-renewal-information.txt" <<EOF
-# =========================================================
 # SSL Certificate Renewal Information for $DOMAIN
-# =========================================================
-
 Certificate Created On:         $CREATED_DATE
-Certificate Expires On:         $EXPIRY_DATE (Latest renewal date)
-
-You must MANUALLY renew the certificate before it expires. To renew, run:
-  certbot renew
-
-After renewing, reload Nginx to apply the new certificate:
-  systemctl reload nginx
+Certificate Expires On:         $EXPIRY_DATE
+You must MANUALLY renew before the expiry date. To renew, run: certbot renew
+After renewing, reload Nginx: systemctl reload nginx
 EOF
-  echo -e "${GREEN}Renewal information saved to $HOME/certbot-renewal-information.txt${NC}"
+  echo -e "Status: ${GREEN}Renewal info saved to $HOME/certbot-renewal-information.txt${NC}"
 
-  # --- Final Summary ---
-  echo -e "\n${GREEN}============================= SETUP COMPLETE! ==============================${NC}"
-  echo -e "Your server is now configured with the following structure:"
-  echo -e "  - ${BLUE}$DOMAIN${NC} permanently redirects to ${YELLOW}www.$DOMAIN${NC}"
-  echo -e "  - ${BLUE}www.$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/www/${NC}"
-  echo -e "  - ${BLUE}AnyOtherSubdomain.$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/subdomains/AnyOtherSubdomain/${NC}"
-  echo -e ""
-  echo -e "To add a new dynamic subdomain (e.g., https://portfolio.${DOMAIN}), run:"
-  echo -e "  ${YELLOW}mkdir $HOME/SERVER/subdomains/portfolio${NC}"
-  echo -e "  ${YELLOW}echo '<h1>Portfolio</h1>' > $HOME/SERVER/subdomains/portfolio/index.html${NC}"
-  echo -e "  ${YELLOW}chown -R www-data:www-data $HOME/SERVER/subdomains/portfolio${NC}"
-  echo -e "\n${YELLOW}IMPORTANT: Remember to manually renew your SSL certificate! See details in $HOME/certbot-renewal-information.txt${NC}"
-  echo -e "${GREEN}==========================================================================${NC}"
+  echo -e "\n${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗"
+  echo -e "║                             ${GREEN}SETUP COMPLETE!${NC}                               ║"
+  echo -e "╠══════════════════════════════════════════════════════════════════════════════╣"
+  echo -e "║ ${BLUE}$DOMAIN${NC} permanently redirects to ${YELLOW}www.$DOMAIN${NC}                          ║"
+  echo -e "║ ${BLUE}www.$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/www/${NC}                             ║"
+  echo -e "║ ${BLUE}any.subdomain.${DOMAIN}${NC} is served from ${YELLOW}$HOME/SERVER/subdomains/any/${NC}         ║"
+  echo -e "║                                                                              ║"
+  echo -e "║ To add a new subdomain (e.g., portfolio):                                    ║"
+  echo -e "║   ${YELLOW}mkdir $HOME/SERVER/subdomains/portfolio${NC}                                    ║"
+  echo -e "║   ${YELLOW}chown -R www-data:www-data $HOME/SERVER/subdomains/portfolio${NC}                 ║"
+  echo -e "║                                                                              ║"
+  echo -e "║ ${RED}IMPORTANT:${NC} Remember to manually renew your SSL certificate!                 ║"
+  echo -e "╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
 }
 
 # ==============================================================================
@@ -230,50 +205,54 @@ EOF
 # ==============================================================================
 run_uninstall() {
   echo -e "\n${RED}--- UNINSTALL / ROLLBACK ---${NC}"
-  read -p "Please enter the root domain you used during setup (e.g., tejl.com): " DOMAIN
+  read -p "Please enter the root domain used during setup (e.g., tejl.com): " DOMAIN
   if [ -z "$DOMAIN" ]; then
-    echo -e "${RED}Error: Domain cannot be empty. Exiting.${NC}"
+    echo -e "${RED}Error: Domain cannot be empty.${NC}"
     exit 1
   fi
-
-  read -p "Are you sure you want to remove all Nginx, Certbot, and related files for $DOMAIN? [y/N]: " CONFIRM
+  read -p "Are you sure you want to remove all files and packages for $DOMAIN? [y/N]: " CONFIRM
   if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
-    echo -e "Uninstall cancelled."
+    echo "Uninstall cancelled."
     exit 0
   fi
 
-  echo -e "\n${BLUE}--- Stopping and disabling services... ---${NC}"
+  echo -n "Stopping services and removing packages... "
   systemctl stop nginx || true
   systemctl disable nginx || true
+  apt-get purge --auto-remove -y nginx nginx-common certbot python3-certbot-nginx curl dnsutils &>/dev/null
+  echo -e "${GREEN}Done.${NC}"
 
-  echo -e "\n${BLUE}--- Removing packages... ---${NC}"
-  apt purge --auto-remove -y nginx nginx-common certbot python3-certbot-nginx curl || true
-
-  echo -e "\n${BLUE}--- Deleting Let's Encrypt certificates and files... ---${NC}"
+  echo -n "Deleting Let's Encrypt certificates... "
   rm -rf /etc/letsencrypt/
+  echo -e "${GREEN}Done.${NC}"
 
-  echo -e "\n${BLUE}--- Resetting Firewall (UFW)... ---${NC}"
+  echo -n "Resetting Firewall (UFW)... "
   ufw delete allow 'Nginx Full' || true
-  echo -e "Firewall rule for Nginx removed."
+  echo -e "${GREEN}Done.${NC}"
 
-  echo -e "\n${BLUE}--- Removing files and directories... ---${NC}"
+  echo -n "Removing files and directories... "
   rm -f /etc/nginx/sites-enabled/$DOMAIN
   rm -f /etc/nginx/sites-available/$DOMAIN
   rm -rf "$HOME/SERVER"
   rm -f "$HOME/certbot-renewal-information.txt"
+  echo -e "${GREEN}Done.${NC}"
 
-  echo -e "\n${GREEN}========================= UNINSTALL COMPLETE =========================${NC}"
-  echo -e "All associated packages, configurations, and files have been removed."
-  echo -e "${GREEN}======================================================================${NC}"
+  echo -e "\n${GREEN}✔ Uninstall Complete. All changes have been rolled back.${NC}"
 }
 
 # ==============================================================================
 #                                SCRIPT MAIN LOGIC
 # ==============================================================================
 clear
-echo -e "${BLUE}====================================================${NC}"
-echo -e "${BLUE}      Hosting Automator: Nginx & Wildcard SSL       ${NC}"
-echo -e "${BLUE}====================================================${NC}"
+# Check if running as root
+if [ "$(id -u)" -ne 0 ]; then
+  echo -e "${RED}This script must be run as root. Please use 'sudo ./hosting-automator.sh' or run as the root user.${NC}"
+  exit 1
+fi
+
+echo -e "${BLUE}╔═════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║      ${NC}Hosting Automator: Nginx & Wildcard SSL      ${BLUE}║${NC}"
+echo -e "${BLUE}╚═════════════════════════════════════════════════════╝${NC}"
 echo -e ""
 echo -e "Please choose an action to perform:"
 echo -e "  1) ${GREEN}SETUP${NC}:    Run the full installation and configuration."
