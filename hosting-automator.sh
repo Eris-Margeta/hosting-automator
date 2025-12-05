@@ -2,7 +2,7 @@
 
 # ==============================================================================
 #           Hosting Automator: Nginx & Wildcard SSL Setup Script
-#                           --- Final Version ---
+#                           --- Definitive Version ---
 #
 # This script can perform two main actions:
 # 1. SETUP: A full installation and configuration of the web server.
@@ -10,8 +10,8 @@
 #
 # This version creates a professional hosting structure:
 # - yourdomain.com -> Redirects to www.yourdomain.com
-# - www.yourdomain.com -> Served from $HOME/SERVER/www/
-# - *.yourdomain.com -> Served dynamically from $HOME/SERVER/subdomains/
+# - www.yourdomain.com -> Served from /var/www/SERVER/www/
+# - *.yourdomain.com -> Served dynamically from /var/www/SERVER/subdomains/
 # ==============================================================================
 
 # Exit immediately if a command exits with a non-zero status.
@@ -37,7 +37,6 @@ print_step() {
 run_setup() {
   print_step "Initial Configuration"
 
-  # Install curl/dnsutils if not present for IP detection
   echo -n "Checking for required tools (curl, dig)... "
   if ! command -v curl &>/dev/null || ! command -v dig &>/dev/null; then
     echo -e "${YELLOW}Not found. Installing...${NC}"
@@ -46,24 +45,19 @@ run_setup() {
   fi
   echo -e "${GREEN}OK.${NC}"
 
-  # Robustly detect the server's public IPv4 address using multiple methods
   echo -n "Detecting public IPv4 address... "
   SERVER_IP=$(curl -s https://ipv4.icanhazip.com)
+  if [ -z "$SERVER_IP" ]; then SERVER_IP=$(curl -s https://api.ipify.org); fi
+  if [ -z "$SERVER_IP" ]; then SERVER_IP=$(dig +short myip.opendns.com @resolver1.opendns.com); fi
   if [ -z "$SERVER_IP" ]; then
-    SERVER_IP=$(curl -s https://api.ipify.org)
-  fi
-  if [ -z "$SERVER_IP" ]; then
-    SERVER_IP=$(dig +short myip.opendns.com @resolver1.opendns.com)
-  fi
-  if [ -z "$SERVER_IP" ]; then
-    echo -e "${RED}Fatal: Could not determine public IPv4 address after 3 attempts. Please check network connectivity.${NC}"
+    echo -e "${RED}Fatal: Could not determine public IPv4.${NC}"
     exit 1
   fi
   echo -e "${GREEN}Done.${NC}"
 
-  read -p "Please enter your root domain (e.g., tejl.com): " DOMAIN
+  read -p "Please enter your root domain (e.g., seolitic.ai): " DOMAIN
   if [ -z "$DOMAIN" ]; then
-    echo -e "${RED}Error: Domain cannot be empty. Exiting.${NC}"
+    echo -e "${RED}Error: Domain cannot be empty.${NC}"
     exit 1
   fi
 
@@ -71,21 +65,12 @@ run_setup() {
   echo -e "  - Domain: ${YELLOW}$DOMAIN${NC}"
   echo -e "  - Detected Public IPv4: ${YELLOW}$SERVER_IP${NC}"
 
-  # --- DNS Setup Instructions ---
   echo -e "\n${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗"
   echo -e "║${NC}                           ${YELLOW}ACTION REQUIRED: DNS Setup${NC}                           ${YELLOW}║"
   echo -e "║${NC} Before we proceed, you ${YELLOW}MUST${NC} configure the following DNS records.              ${YELLOW}║"
-  echo -e "║${NC} The server's IPv4 has been automatically detected for you.                     ${YELLOW}║"
   echo -e "╠══════════════════════════════════════════════════════════════════════════════╣"
-  echo -e "║ ${BLUE}Record 1: Root Domain A Record (for redirect)${NC}                                 ${YELLOW}║"
-  echo -e "║   - Type:    A                                                               ${YELLOW}║"
-  echo -e "║   - Name:    @                                                               ${YELLOW}║"
-  echo -e "║   - Value:   ${SERVER_IP}                                                     ${YELLOW}║"
-  echo -e "║                                                                              ${YELLOW}║"
-  echo -e "║ ${BLUE}Record 2: Wildcard Domain A Record${NC}                                          ${YELLOW}║"
-  echo -e "║   - Type:    A                                                               ${YELLOW}║"
-  echo -e "║   - Name:    *                                                               ${YELLOW}║"
-  echo -e "║   - Value:   ${SERVER_IP}                                                     ${YELLOW}║"
+  echo -e "║ ${BLUE}Record 1: Root Domain (A Record)${NC}       - Name: ${YELLOW}@${NC}     Value: ${YELLOW}${SERVER_IP}${NC}        ${YELLOW}║"
+  echo -e "║ ${BLUE}Record 2: Wildcard Subdomains (A Record)${NC} - Name: ${YELLOW}*${NC}     Value: ${YELLOW}${SERVER_IP}${NC}        ${YELLOW}║"
   echo -e "╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
   read -p "Press [Enter] to continue once you have set the A records..."
 
@@ -102,13 +87,18 @@ run_setup() {
   ufw --force enable &>/dev/null
   echo -e "Status: ${GREEN}Firewall is active and allows SSH, HTTP, and HTTPS traffic.${NC}"
 
-  print_step "Creating Directory Structure"
-  mkdir -p "$HOME/SERVER/www"
-  mkdir -p "$HOME/SERVER/subdomains/blog"
-  echo "<h1>WWW Main Site Works! (e.g., https://www.$DOMAIN)</h1>" >"$HOME/SERVER/www/index.html"
-  echo "<h1>Blog Subdomain Works! (e.g., https://blog.$DOMAIN)</h1>" >"$HOME/SERVER/subdomains/blog/index.html"
-  chown -R www-data:www-data "$HOME/SERVER"
-  echo -e "Status: ${GREEN}Web directory structure created at $HOME/SERVER${NC}"
+  print_step "Creating Web Directory Structure in /var/www"
+  mkdir -p "/var/www/SERVER/www"
+  mkdir -p "/var/www/SERVER/subdomains/blog"
+  echo "<h1>WWW Main Site Works!</h1>" >"/var/www/SERVER/www/index.html"
+  echo "<h1>Blog Subdomain Works!</h1>" >"/var/www/SERVER/subdomains/blog/index.html"
+  echo -e "Status: ${GREEN}Web directory structure created.${NC}"
+
+  print_step "Setting Final Directory Permissions"
+  chown -R www-data:www-data "/var/www/SERVER"
+  find "/var/www/SERVER" -type d -exec chmod 755 {} \;
+  find "/var/www/SERVER" -type f -exec chmod 644 {} \;
+  echo -e "Status: ${GREEN}Ownership and permissions correctly applied.${NC}"
 
   print_step "Preparing Nginx for SSL Certificate"
   rm -f /etc/nginx/sites-enabled/default
@@ -152,14 +142,14 @@ server { # Redirects the APEX/ROOT domain to WWW
 }
 server { # Handles the WWW subdomain specifically
     listen 443 ssl http2; listen [::]:443 ssl http2; server_name www.$DOMAIN;
-    root $HOME/SERVER/www; index index.html;
+    root /var/www/SERVER/www; index index.html;
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf; ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
 server { # Dynamically handles ALL OTHER subdomains
     listen 443 ssl http2; listen [::]:443 ssl http2;
     server_name ~^(?!www\.)(?<subdomain>.+)\.$DOMAIN$;
-    root $HOME/SERVER/subdomains/\$subdomain; index index.html;
+    root /var/www/SERVER/subdomains/\$subdomain; index index.html;
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf; ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
@@ -189,12 +179,12 @@ EOF
   echo -e "║                             ${GREEN}SETUP COMPLETE!${NC}                               ║"
   echo -e "╠══════════════════════════════════════════════════════════════════════════════╣"
   echo -e "║ ${BLUE}$DOMAIN${NC} permanently redirects to ${YELLOW}www.$DOMAIN${NC}                          ║"
-  echo -e "║ ${BLUE}www.$DOMAIN${NC} is served from ${YELLOW}$HOME/SERVER/www/${NC}                             ║"
-  echo -e "║ ${BLUE}any.subdomain.${DOMAIN}${NC} is served from ${YELLOW}$HOME/SERVER/subdomains/any/${NC}         ║"
+  echo -e "║ ${BLUE}www.$DOMAIN${NC} is served from ${YELLOW}/var/www/SERVER/www/${NC}                        ║"
+  echo -e "║ ${BLUE}any.sub.${DOMAIN}${NC} is served from ${YELLOW}/var/www/SERVER/subdomains/any/${NC}         ║"
   echo -e "║                                                                              ║"
   echo -e "║ To add a new subdomain (e.g., portfolio):                                    ║"
-  echo -e "║   ${YELLOW}mkdir $HOME/SERVER/subdomains/portfolio${NC}                                    ║"
-  echo -e "║   ${YELLOW}chown -R www-data:www-data $HOME/SERVER/subdomains/portfolio${NC}                 ║"
+  echo -e "║   ${YELLOW}mkdir /var/www/SERVER/subdomains/portfolio${NC}                                 ║"
+  echo -e "║   ${YELLOW}chown -R www-data:www-data /var/www/SERVER/subdomains/portfolio${NC}              ║"
   echo -e "║                                                                              ║"
   echo -e "║ ${RED}IMPORTANT:${NC} Remember to manually renew your SSL certificate!                 ║"
   echo -e "╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
@@ -205,7 +195,7 @@ EOF
 # ==============================================================================
 run_uninstall() {
   echo -e "\n${RED}--- UNINSTALL / ROLLBACK ---${NC}"
-  read -p "Please enter the root domain used during setup (e.g., tejl.com): " DOMAIN
+  read -p "Please enter the root domain used during setup (e.g., seolitic.ai): " DOMAIN
   if [ -z "$DOMAIN" ]; then
     echo -e "${RED}Error: Domain cannot be empty.${NC}"
     exit 1
@@ -233,7 +223,7 @@ run_uninstall() {
   echo -n "Removing files and directories... "
   rm -f /etc/nginx/sites-enabled/$DOMAIN
   rm -f /etc/nginx/sites-available/$DOMAIN
-  rm -rf "$HOME/SERVER"
+  rm -rf "/var/www/SERVER"
   rm -f "$HOME/certbot-renewal-information.txt"
   echo -e "${GREEN}Done.${NC}"
 
