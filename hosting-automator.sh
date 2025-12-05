@@ -99,26 +99,20 @@ EOF
   # --- Step 5: Final Nginx Configuration ---
   echo -e "\n${BLUE}--- Applying final Nginx configuration... ---${NC}"
 
-  # FIX: Create the missing Let's Encrypt options file to prevent Nginx error.
   mkdir -p /etc/letsencrypt/
   cat >/etc/letsencrypt/options-ssl-nginx.conf <<EOF
 ssl_session_cache shared:le_nginx_SSL:10m;
 ssl_session_timeout 1440m;
 ssl_session_tickets off;
-
 ssl_protocols TLSv1.2 TLSv1.3;
 ssl_prefer_server_ciphers off;
-
 ssl_ciphers "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384";
 EOF
-  # FIX: Generate a Diffie-Hellman group file used by the options file above.
   openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048
 
-  # Now, write the final Nginx config
   cat >/etc/nginx/sites-available/$DOMAIN <<EOF
 # This server block handles the root domain (e.g., tejl.com)
 server {
-    # FIX: Updated listen directive to modern syntax to avoid warnings.
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
@@ -135,7 +129,6 @@ server {
 
 # This server block dynamically handles all subdomains (e.g., blog.tejl.com)
 server {
-    # FIX: Updated listen directive to modern syntax to avoid warnings.
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
@@ -162,17 +155,41 @@ EOF
   echo -e "${GREEN}Final Nginx configuration has been applied.${NC}"
 
   # --- Step 6: Create Renewal Information File ---
-  echo -e "\n${BLUE}--- Creating renewal information file... ---${NC}"
+  echo -e "\n${BLUE}--- Creating detailed renewal information file... ---${NC}"
+
+  # Get the creation date (today) and the expiry date from the certificate
+  CREATED_DATE=$(date +%d.%m.%Y)
+  EXPIRY_STRING=$(openssl x509 -enddate -noout -in /etc/letsencrypt/live/$DOMAIN/cert.pem | cut -d'=' -f2)
+  EXPIRY_DATE=$(date -d "$EXPIRY_STRING" +%d.%m.%Y)
+
   cat >/root/certbot-renewal-information.txt <<EOF
+# =========================================================
 # SSL Certificate Renewal Information for $DOMAIN
+# =========================================================
+
+Certificate Created On:         $CREATED_DATE
+Certificate Expires On:         $EXPIRY_DATE (Latest renewal date)
+
 Your wildcard SSL certificate was generated using Certbot's "manual" method.
-This means it CANNOT be renewed automatically.
-You must MANUALLY renew the certificate before it expires (every 90 days).
-To renew, run the following command and follow the on-screen instructions:
+This means the standard 'certbot renew' cron job CANNOT automate the renewal.
+
+You must MANUALLY renew the certificate before it expires. It is recommended
+to renew it about a week before the expiry date.
+
+To renew, run the following command. It will prompt you to create a new
+DNS TXT record, just like you did during the initial setup:
+
   certbot renew
-To check the expiry date of your current certificate, run:
+
+After renewing, you should reload Nginx to apply the new certificate:
+
+  systemctl reload nginx
+
+You can always check the exact expiry date of your current certificate with:
+
   openssl x509 -enddate -noout -in /etc/letsencrypt/live/$DOMAIN/cert.pem
 EOF
+
   echo -e "${GREEN}Renewal information saved to /root/certbot-renewal-information.txt${NC}"
 
   # --- Final Summary ---
@@ -181,7 +198,7 @@ EOF
   echo -e "  ${YELLOW}mkdir /root/www/blog${NC}"
   echo -e "  ${YELLOW}echo '<h1>Hello Blog!</h1>' > /root/www/blog/index.html${NC}"
   echo -e "  ${YELLOW}chown -R www-data:www-data /root/www/blog${NC}"
-  echo -e "${YELLOW}IMPORTANT: Remember to manually renew your SSL certificate!${NC}"
+  echo -e "${YELLOW}IMPORTANT: Remember to manually renew your SSL certificate! See details in /root/certbot-renewal-information.txt${NC}"
   echo -e "${GREEN}==========================================================================${NC}"
 }
 
@@ -210,7 +227,6 @@ run_uninstall() {
   apt purge --auto-remove -y nginx nginx-common certbot python3-certbot-nginx || true
 
   echo -e "\n${BLUE}--- Deleting Let's Encrypt certificates and files... ---${NC}"
-  # Remove the entire letsencrypt directory which contains certs, configs, and our helper files
   rm -rf /etc/letsencrypt/
 
   echo -e "\n${BLUE}--- Resetting Firewall (UFW)... ---${NC}"
