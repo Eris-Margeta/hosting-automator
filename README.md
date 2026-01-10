@@ -1,4 +1,7 @@
-# Hosting Automator Script
+# Hosting Automator Script [DEPRECATED]
+
+This repo is now deprecated and moved into github.com/Eris-Margeta/tools for easier maintenance and discovery
+
 
 This repository contains a shell script, `hosting-automator.sh`, designed to automate the setup of a Debian server to host multiple static websites on dynamic subdomains. It uses Nginx for the web server and secures all sites with a single, wildcard Let's Encrypt SSL certificate.
 
